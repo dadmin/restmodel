@@ -62,10 +62,14 @@ abstract class Model {
         ORM::configure("pgsql:host={$dbSettings['host']};dbname={$dbSettings['dbname']}", null, $this->connectionName);
         ORM::configure('username', $dbSettings['username'], $this->connectionName);
         ORM::configure('password', $dbSettings['password'], $this->connectionName);
-        ORM::configure('driver_options', [
-            \PDO::ATTR_EMULATE_PREPARES => $dbSettings['emulatePrepares'],
-            \PDO::ATTR_PERSISTENT => $dbSettings['persistent'],
-        ],$this->connectionName);
+        $driverOptions = [];
+        if (isset($dbSettings['emulatePrepares'])) {
+            $driverOptions[\PDO::ATTR_EMULATE_PREPARES] = $dbSettings['emulatePrepares'];
+        }
+        if (isset($dbSettings['persistent'])) {
+            $driverOptions[\PDO::ATTR_PERSISTENT] = $dbSettings['persistent'];
+        }
+        ORM::configure('driver_options', $driverOptions, $this->connectionName);
 
         $this->dbSettings = $dbSettings;
 
