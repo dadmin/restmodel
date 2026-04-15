@@ -42,7 +42,7 @@ abstract class Model {
 
         ORM::configure('logging', true, $this->connectionName);
         ORM::configure('logger', function($log_string, $query_time) use ($logger) {
-            $logger->addDebug($log_string . ' in ' . $query_time);
+            $logger->debug($log_string . ' in ' . $query_time);
         }, $this->connectionName);
 
     }
@@ -300,7 +300,7 @@ abstract class Model {
                             // Date fields should end by '_on' (posted_on)
                             if (substr($field, 0, 3) != 'is_' && substr($field, -3) == '_on') {
 
-                                $time = strtotime($fieldParams['from']);
+                                $time = strtotime((string)$fieldParams['from']);
 
                                 $from = $time !== false ? date("Y-m-d H:i:s", $time) : false;
                             } else {
@@ -321,7 +321,7 @@ abstract class Model {
                         if (isset($fieldParams['to']) && is_scalar($fieldParams['to'])) {
 
                             if (substr($field, 0, 3) != 'is_' && substr($field, -3) == '_on') {
-                                $time = strtotime($fieldParams['to']);
+                                $time = strtotime((string)$fieldParams['to']);
                                 $to = $time !== false ? date("Y-m-d H:i:s", $time) : false;
                             } else {
                                 $to = $fieldParams['to'];
@@ -357,11 +357,11 @@ abstract class Model {
                                 ModelException::throwException("Wrong '$field' parameter");
                             }
 
-                            $time = strtotime($fieldParams);
+                            $time = strtotime((string)$fieldParams);
                             $fieldParams = $time !== false ? date("Y-m-d H:i:s", $time) : false;
                         }
 
-                        if (strpos($fieldParams, '%') !== false) {
+                        if (is_string($fieldParams) && strpos($fieldParams, '%') !== false) {
                             $orm->where_like($field, $fieldParams);
                         } else {
 

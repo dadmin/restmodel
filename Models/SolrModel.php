@@ -157,7 +157,7 @@ class SolrModel {
         try {
             $queryResponse = $this->client->query($query);
         } catch(\SolrClientException $e) {
-            $this->logger->addDebug(print_r($e->getInternalInfo(), 1));
+            $this->logger->debug(print_r($e->getInternalInfo(), 1));
             throw $e;
         }
 
@@ -370,7 +370,7 @@ class SolrModel {
             $fields = $this->getFieldsValidators();
 
             if($orderField === 'random' && $order[$orderField]) {
-                $randStr = substr(preg_replace("/[^a-zA-Z0-9]/", "", $order[$orderField]), 0, 16);
+                $randStr = substr(preg_replace("/[^a-zA-Z0-9]/", "", (string)$order[$orderField]), 0, 16);
                 $query->addSortField("{$orderField}_{$randStr}", \SolrQuery::ORDER_DESC);
             }
 

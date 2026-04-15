@@ -2,222 +2,169 @@
 
 namespace RestModel\Controllers;
 
+use Psr\Http\Message\ResponseInterface as Response;
+use Psr\Http\Message\ServerRequestInterface as Request;
 use Whoops\Run;
 use Whoops\Handler\PrettyPageHandler;
 use RestModel\Exceptions\BadRequest400;
 use RestModel\Exceptions\InternalServerError500;
 use RestModel\Exceptions\APIException;
-use Slim\Slim;
+use RestModel\Exceptions\HttpStopException;
 use PDO;
 use PDOStatement;
 
 class Controller {
 
-    public function __construct() {
+    protected Request $request;
+    protected Response $response;
 
-        $this->app = \Slim\Slim::getInstance();
-
-    }
-
-    public function __($value) {
-
-        if(property_exists($this, 'app') && property_exists($this->app, 'log')
-            && method_exists($this->app->log, 'addDebug')) {
-            $this->app->log->addDebug($value);
-        } else {
-            error_log($value);
-        }
-
-    }
-
-    protected static function getControllerName($controllerName) {
+    protected static function getControllerName(string $controllerName): string {
         return "{$controllerName}Controller";
     }
 
-    public static function init($controllerName, $actionName) {
+    /**
+     * Returns a Slim 4 compatible route handler closure.
+     * URL path parameters are passed as positional arguments to $actionName.
+     *
+     * Usage: $app->get('/items', Controller::init('Item', 'getList'));
+     *        $app->get('/items/{id}', Controller::init('Item', 'getItem'));
+     */
+    public static function init(string $controllerName, string $actionName): \Closure {
 
         $controllerName = static::getControllerName($controllerName);
-        $controller = new $controllerName();
 
-        if(!method_exists($controller, $actionName) && !is_callable([$controller, $actionName])) {
-            throw new BadRequest400("Invalid URL");
-        }
+        return function(Request $request, Response $response, array $args) use ($controllerName, $actionName): Response {
+            $controller = new $controllerName();
+            $controller->request = $request;
+            $controller->response = $response;
 
-        return [$controller, $actionName];
-
-    }
-
-    static protected function registerWhoops() {
-
-        $app = Slim::getInstance();
-
-        $app->container->singleton('whoopsPrettyPageHandler', function() {
-            return new PrettyPageHandler();
-        });
-
-        $app->whoopsSlimInfoHandler = $app->container->protect(function() use ($app) {
+            if (!method_exists($controller, $actionName) && !is_callable([$controller, $actionName])) {
+                throw new BadRequest400("Invalid URL");
+            }
 
             try {
-                $request = $app->request();
-            } catch (\RuntimeException $e) {
-                return;
+                call_user_func_array([$controller, $actionName], array_values($args));
+            } catch (HttpStopException $e) {
+                return $e->getResponse();
             }
 
-            $current_route = $app->router()->getCurrentRoute();
-            $route_details = array();
+            return $controller->response;
+        };
+    }
 
-            if ($current_route !== null) {
-                $route_details = array(
-                    'Route Name'       => $current_route->getName() ?: '<none>',
-                    'Route Pattern'    => $current_route->getPattern() ?: '<none>',
-                    'Route Middleware' => $current_route->getMiddleware() ?: '<none>',
-                );
-            }
-
-            $app->whoopsPrettyPageHandler->addDataTable('Slim Application', array_merge(array(
-                'Charset'          => $request->headers('ACCEPT_CHARSET'),
-                'Locale'           => $request->getContentCharset() ?: '<none>',
-                'Application Class'=> get_class($app)
-            ), $route_details));
-
-            $app->whoopsPrettyPageHandler->addDataTable('Slim Application (Request)', array(
-                'URI'         => $request->getRootUri(),
-                'Request URI' => $request->getResourceUri(),
-                'Path'        => $request->getPath(),
-                'Query String'=> $request->params() ?: '<none>',
-                'HTTP Method' => $request->getMethod(),
-                'Script Name' => $request->getScriptName(),
-                'Base URL'    => $request->getUrl(),
-                'Scheme'      => $request->getScheme(),
-                'Port'        => $request->getPort(),
-                'Host'        => $request->getHost(),
-            ));
-        });
-        // Open with editor if editor is set
-        $whoops_editor = $app->config('whoops.editor');
-        if ($whoops_editor !== null) {
-            $app->whoopsPrettyPageHandler->setEditor($whoops_editor);
+    /**
+     * Immediately stops action execution and returns the given HTTP status.
+     * Equivalent to Slim 2's $app->halt().
+     */
+    protected function halt(int $status, string $body = ''): never {
+        $this->response = $this->response->withStatus($status);
+        if ($body !== '') {
+            $this->response->getBody()->write($body);
         }
-        $app->container->singleton('whoops', function() use ($app) {
-            $run = new Run();
-            $run->pushHandler($app->whoopsPrettyPageHandler);
-            $run->pushHandler($app->whoopsSlimInfoHandler);
-            return $run;
-        });
-
+        throw new HttpStopException($this->response);
     }
 
-    static public function notFound() {
-        $app = Slim::getInstance();
-        $params = $app->request->get();
-        $app->log->addWarning('Not found url: ' . $app->request->getPathInfo() . ($params ? " GET params: ". print_r($params,1) : ''));
+    public function __($value): void {
+        error_log((string)$value);
     }
 
-    static public function error(\Exception $e) {
+    /**
+     * Slim 4 404 handler — wire up via error middleware in the application.
+     */
+    public static function notFound(Request $request, Response $response): Response {
+        $queryParams = $request->getQueryParams();
+        error_log('Not found url: ' . $request->getUri()->getPath() . ($queryParams ? ' GET params: ' . print_r($queryParams, 1) : ''));
+        return $response->withStatus(404);
+    }
 
-        $app = Slim::getInstance();
+    /**
+     * Error handler helper — wrap in a Slim 4 error middleware callable in the application:
+     *
+     *   $middleware->setDefaultErrorHandler(
+     *       function(Request $req, \Throwable $e, bool $d, bool $l, bool $ld) use ($app) {
+     *           return Controller::error($e, $req, $app->getResponseFactory()->createResponse());
+     *       }
+     *   );
+     */
+    public static function error(\Throwable $e, Request $request, Response $response): Response {
 
-
-        if($e instanceof APIException) {
-
-            $app->log->addError("API error [{$e->getHTTPCode()}][{$e->getCode()}]: ".print_r(['error' => $e->getErrors()],1));
-            $app->halt($e->getHTTPCode(), json_encode(['error' => $e->getErrors()], JSON_FORCE_OBJECT));
-
-
-        } else {
-
-            $app->log->addError("API error [500][{$e->getCode()}]: {$e->getMessage()} \n {$e->getTraceAsString()}");
-            $app->syslog->addError("API error [500][{$e->getCode()}]: {$e->getMessage()} \n {$e->getTraceAsString()}");
-
-
-            if($app->config('mode') == 'development') {
-
-                self::registerWhoops();
-                $app->whoops->handleException($e);
-
-            }
-
-            $app->halt(500);
-
+        if ($e instanceof APIException) {
+            error_log("API error [{$e->getHTTPCode()}][{$e->getCode()}]: " . print_r(['error' => $e->getErrors()], 1));
+            $response->getBody()->write(json_encode(['error' => $e->getErrors()], JSON_FORCE_OBJECT));
+            return $response
+                ->withStatus($e->getHTTPCode())
+                ->withHeader('Content-Type', 'application/json');
         }
 
+        error_log("API error [500][{$e->getCode()}]: {$e->getMessage()}\n{$e->getTraceAsString()}");
+
+        return $response->withStatus(500);
     }
 
-    public function fetch($template, $params = []) {
-        $this->app->view->appendData($params);
-        return $this->app->view->fetch($template, $params);
+    /**
+     * Returns a Whoops Run instance for development error display.
+     * Register as a Slim 4 error handler or middleware in the application.
+     */
+    public static function createWhoopsHandler(): Run {
+        $whoops = new Run();
+        $whoops->pushHandler(new PrettyPageHandler());
+        return $whoops;
     }
 
-    public function render($template, $params = []) {
-        $this->app->render($template, $params);
-    }
+    public function sendCSVFile($csv, string $outputName = 'file.csv', array $columnNames = []): void {
 
-    public function sendCSVFile($csv, $outputName = 'file.csv', $columnNames = []) {
+        $this->response = $this->response
+            ->withHeader('Content-type', 'application/csv')
+            ->withHeader('Content-Disposition', 'attachment; filename="' . $outputName . '"; modification-date="' . date('r') . '";');
 
-        $this->app->response->headers->set('Content-type', 'application/csv');
-        $this->app->response->headers->set('Content-Disposition', 'attachment; filename="'.$outputName.'"; modification-date="'.date('r').'";');
+        if ($csv instanceof PDOStatement) {
 
-        if($csv instanceof PDOStatement) {
-
-            if (!($output = fopen('php://temp/maxmemory:'. (5*1024*1024), 'r+'))) {
+            if (!($output = fopen('php://temp/maxmemory:' . (5 * 1024 * 1024), 'r+'))) {
                 InternalServerError500::throwException("Can't open output stream");
             }
 
             $flag = false;
             while ($row = $csv->fetch(PDO::FETCH_ASSOC)) {
-
                 if (!$flag) {
                     $columnNames = $columnNames ?: array_keys($row);
                     fputcsv($output, $columnNames);
                     $flag = true;
                 }
-                
                 fputcsv($output, $row);
             }
 
             rewind($output);
-            $return = stream_get_contents($output);
-            $this->app->halt(200, $return);
+            $body = stream_get_contents($output);
+            fclose($output);
 
-            if (!fclose($output)) {
-                InternalServerError500::throwException("Can't close php://output");
-            }
+        } elseif (is_array($csv)) {
 
-        } elseif(is_array($csv)) {
-
-            if (!($output = fopen('php://temp/maxmemory:'. (5*1024*1024), 'r+'))) {
+            if (!($output = fopen('php://temp/maxmemory:' . (5 * 1024 * 1024), 'r+'))) {
                 InternalServerError500::throwException("Can't open output stream");
             }
 
-            if($columnNames) {
+            if ($columnNames) {
                 fputcsv($output, $columnNames);
             }
 
-            foreach($csv as $row) {
+            foreach ($csv as $row) {
                 fputcsv($output, $row);
             }
 
             rewind($output);
-            $return = stream_get_contents($output);
-
-            if (!fclose($output)) {
-                InternalServerError500::throwException("Can't close php://output");
-            }
-
-            $this->app->halt(200, $return);
-
+            $body = stream_get_contents($output);
+            fclose($output);
 
         } else {
-            $this->app->response->headers->set('Content-Length', strlen($csv));
-            $this->app->response->headers->set('Cache-Control', 'no-cache, must-revalidate');
-            $this->app->response->headers->set('Pragma', 'no-cache');
-            $this->app->response->headers->set('Expires', '0');
-            $this->app->halt(200, $csv);
+            $body = $csv;
+            $this->response = $this->response
+                ->withHeader('Content-Length', (string)strlen($csv))
+                ->withHeader('Cache-Control', 'no-cache, must-revalidate')
+                ->withHeader('Pragma', 'no-cache')
+                ->withHeader('Expires', '0');
         }
 
-        $this->app->halt(200);
-
-
+        $this->response->getBody()->write($body);
+        $this->halt(200);
     }
-
 }
