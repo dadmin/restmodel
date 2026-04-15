@@ -7,6 +7,14 @@ use ORM;
 
 abstract class Model {
 
+    private static ?array $defaultDbSettings = null;
+    private static mixed $defaultLogger = null;
+
+    public static function setDefaults(array $dbSettings, mixed $logger = null): void {
+        self::$defaultDbSettings = $dbSettings;
+        self::$defaultLogger = $logger;
+    }
+
     protected $connectionName;
 
     protected $logger;
@@ -69,9 +77,12 @@ abstract class Model {
     }
 
 
-    public function __construct($dbSettings, $logger = null) {
+    public function __construct(?array $dbSettings = null, mixed $logger = null) {
 
-        if(!is_null($dbSettings)) {
+        $dbSettings ??= self::$defaultDbSettings;
+        $logger ??= self::$defaultLogger;
+
+        if (!is_null($dbSettings)) {
             $this->init($dbSettings, $logger);
         }
 

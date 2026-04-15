@@ -12,6 +12,14 @@ class SolrModel {
     const FIELD_DATETIME = 1;
     const FIELD_BOOLEAN = 2;
 
+    private static ?array $defaultConfig = null;
+    private static mixed $defaultLogger = null;
+
+    public static function setDefaults(array $config, mixed $logger = null): void {
+        self::$defaultConfig = $config;
+        self::$defaultLogger = $logger;
+    }
+
     protected $validators = [];
     protected $client;
     protected $logger;
@@ -97,7 +105,10 @@ class SolrModel {
     }
 
 
-    public function __construct($config, $logger) {
+    public function __construct(?array $config = null, mixed $logger = null) {
+
+        $config ??= self::$defaultConfig;
+        $logger ??= self::$defaultLogger;
 
         $this->logger = $logger;
         $this->client = new SolrClient($config);
